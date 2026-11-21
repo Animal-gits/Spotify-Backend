@@ -1,21 +1,27 @@
 const musicModel = require('../models/music.model');
 const albumModel = require('../models/album.model');
+const userModel = require('../models/user.model');
+const mongoose = require('mongoose');
 
-const { uploadFile } = require('../services/storage.service');
-const jwt = require('jsonwebtoken');
-
+const { uploadFile, deleteFile } = require('../services/storage.service');
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 
 async function createMusic(req, res) {
 
 
-    const { title } = req.body;
+    const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
     const file = req.file;
+
+    if (!title || !file) {
+        return res.status(400).json({ message: "A title and audio file are required" });
+    }
 
     const result = await uploadFile(file.buffer.toString('base64'))
 
     const music = await musicModel.create({
         uri: result.url,
+        fileId: result.fileId,
         title,
         artist: req.user.id,
     })
@@ -37,7 +43,25 @@ async function createMusic(req, res) {
 async function createAlbum(req, res) {
 
 
-    const { title, musics } = req.body;
+    const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
+    const musics = req.body.musics;
+
+    if (!title || !Array.isArray(musics)) {
+        return res.status(400).json({ message: "Album title and a list of tracks are required" });
+    }
+
+    if (musics.some((musicId) => !mongoose.Types.ObjectId.isValid(musicId))) {
+        return res.status(400).json({ message: "Album contains an invalid music ID" });
+    }
+
+    const ownedMusics = await musicModel.countDocuments({
+        _id: { $in: musics },
+        artist: req.user.id
+    });
+
+    if (ownedMusics !== new Set(musics.map(String)).size) {
+        return res.status(400).json({ message: "Albums can only include your own tracks" });
+    }
 
     const album = await albumModel.create({
         title,
@@ -58,26 +82,121 @@ async function createAlbum(req, res) {
 }
 
 
-async function getAllMusics(req,res){
+async function getAllMusics(req, res) {
+    const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 50, 1), 100);
+    const searchTerm = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const query = {};
 
-    const musics = await musicModel
-        .find()
-        .skip(0)
-        .limit(2)
-        .populate("artist", "username email")
+    if (searchTerm) {
+        const search = new RegExp(escapeRegex(searchTerm), "i");
+        const matchingArtists = await userModel.find({
+            username: search,
+            role: "artist"
+        }).select("_id");
 
+        query.$or = [
+            { title: search },
+            { artist: { $in: matchingArtists.map((artist) => artist._id) } }
+        ];
+    }
 
-    res.status(200).json({
-        message : "Music fetched successfully",
-        musics : musics,
-    })
+    const [musics, total] = await Promise.all([
+        musicModel.find(query)
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .populate("artist", "username")
+            .sort({ _id: -1 }),
+        musicModel.countDocuments(query)
+    ]);
 
+    return res.status(200).json({
+        message: "Music fetched successfully",
+        musics,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) }
+    });
+}
+
+async function getArtistMusics(req, res) {
+    const musics = await musicModel.find({ artist: req.user.id })
+        .populate("artist", "username")
+        .sort({ _id: -1 });
+
+    return res.status(200).json({ message: "Your music fetched successfully", musics });
+}
+
+async function getMusicById(req, res) {
+    if (!mongoose.Types.ObjectId.isValid(req.params.musicId)) {
+        return res.status(400).json({ message: "Invalid music ID" });
+    }
+
+    const music = await musicModel.findById(req.params.musicId).populate("artist", "username");
+    if (!music) {
+        return res.status(404).json({ message: "Music not found" });
+    }
+
+    return res.status(200).json({ message: "Music fetched successfully", music });
+}
+
+async function updateMusic(req, res) {
+    if (!mongoose.Types.ObjectId.isValid(req.params.musicId)) {
+        return res.status(400).json({ message: "Invalid music ID" });
+    }
+
+    const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
+    if (!title) {
+        return res.status(400).json({ message: "A non-empty title is required" });
+    }
+
+    const music = await musicModel.findOneAndUpdate(
+        { _id: req.params.musicId, artist: req.user.id },
+        { $set: { title } },
+        { new: true, runValidators: true }
+    ).populate("artist", "username");
+
+    if (!music) {
+        return res.status(404).json({ message: "Music not found" });
+    }
+
+    return res.status(200).json({ message: "Music updated successfully", music });
+}
+
+async function deleteMusic(req, res) {
+    if (!mongoose.Types.ObjectId.isValid(req.params.musicId)) {
+        return res.status(400).json({ message: "Invalid music ID" });
+    }
+
+    const music = await musicModel.findOne({
+        _id: req.params.musicId,
+        artist: req.user.id
+    });
+
+    if (!music) {
+        return res.status(404).json({ message: "Music not found" });
+    }
+
+    if (music.fileId) {
+        await deleteFile(music.fileId);
+    }
+    await albumModel.updateMany(
+        { musics: music._id },
+        { $pull: { musics: music._id } }
+    );
+    await music.deleteOne();
+
+    return res.status(200).json({ message: "Music deleted successfully" });
 }
 
 
 async function getAllAlbums (req,res){
 
-    const albums = await albumModel.find().select("title artist").populate("artist", "username email")
+    const albums = await albumModel.find().select("title artist musics")
+        .populate("artist", "username")
+        .populate({
+            path: "musics",
+            select: "title uri artist",
+            populate: { path: "artist", select: "username" }
+        })
 
     res.status(200).json({
         message : "Albums fetched successfully",
@@ -93,7 +212,21 @@ async function getAlbumById(req, res) {
 
     const albumId = req.params.albumId
 
-    const album = await albumModel.findById(albumId).populate("artist", "username email")
+    if (!mongoose.Types.ObjectId.isValid(albumId)) {
+        return res.status(400).json({ message: "Invalid album ID" });
+    }
+
+    const album = await albumModel.findById(albumId)
+        .populate("artist", "username")
+        .populate({
+            path: "musics",
+            select: "title uri artist",
+            populate: { path: "artist", select: "username" }
+        })
+
+    if (!album) {
+        return res.status(404).json({ message: "Album not found" });
+    }
 
     return res.status(200).json({
         message : " Album fetched successfully ",
@@ -102,7 +235,27 @@ async function getAlbumById(req, res) {
 
 }
 
+async function getArtistAlbums(req, res) {
+    const albums = await albumModel.find({ artist: req.user.id })
+        .populate({
+            path: "musics",
+            select: "title uri artist",
+            populate: { path: "artist", select: "username" }
+        })
+        .sort({ _id: -1 });
 
+    return res.status(200).json({ message: "Your albums fetched successfully", albums });
+}
 
-
-module.exports = { createMusic, createAlbum , getAllMusics, getAllAlbums , getAlbumById }
+module.exports = {
+    createMusic,
+    createAlbum,
+    getAllMusics,
+    getArtistMusics,
+    getMusicById,
+    updateMusic,
+    deleteMusic,
+    getAllAlbums,
+    getAlbumById,
+    getArtistAlbums
+};

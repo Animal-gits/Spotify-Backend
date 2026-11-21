@@ -4,15 +4,16 @@ async function connectDB() {
 
     try{
         console.log(process.env.MONGO_URI)
-        await mongoose.connect(process.env.MONGO_URI)
+        const conn = await mongoose.connect(process.env.MONGO_URI  ,{
+            dbName : "apna_music"
+        })
 
-        console.log('Database Connected successfully ');
+        console.log('MongoDB Connection Host !! :' , conn.connection.host);
         
     }
     catch(error){
-        console.error('Databse Connection error', error)
-      
-
+        console.error('Databse Connection error', error?.message)
+        process.exit(1)
     }
     
 } 

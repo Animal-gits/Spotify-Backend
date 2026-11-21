@@ -8,6 +8,9 @@ const musicSchema = new mongoose.Schema({
         type : String ,
         required : true,
     },
+    fileId: {
+        type: String,
+    },
     title :{
         type : String,
         required : true, 

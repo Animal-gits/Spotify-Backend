@@ -1,64 +1,37 @@
 const jwt = require('jsonwebtoken');
 
-async function authArtist(req, res, next) {
-
+function authenticate(req, res, next, allowedRoles) {
     const token = req.cookies.token;
 
     if (!token) {
-        return res.status(401).json({ message: "Unauthorized" })
+        return res.status(401).json({ message: "Unauthorized" });
     }
 
-
+    let decoded;
     try {
-
-        const decoded = jwt.verify(token, process.env.JWT_SECRET)
-
-        if (decoded.role !== "artist") {
-            return res.status(403).json({ message: " Your dont have an access to create an album" })
-        }
-
-        req.user = decoded;
-
-        next();
-
-
-    } catch (err) {
-
-        console.log(err)
-        return res.status(401).json({ message: "Unauthorized" })
+        decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (error) {
+        return res.status(401).json({ message: "Unauthorized" });
     }
+
+    if (allowedRoles && !allowedRoles.includes(decoded.role)) {
+        return res.status(403).json({ message: "You don't have access" });
+    }
+
+    req.user = decoded;
+    return next();
 }
 
-
-async function authUser(req , res , next){
-
-    const token = req.cookies.token;
-
-    if(!token){
-        return res.status(401).json({message : "Unauthorized"})
-    }
-
-    try {
-
-        const decoded = jwt.verify(token , process.env.JWT_SECRET)
-
-        if(decoded.role !== "user"){
-
-            return res.status(403).json({message : " You dont have access"})
-        }
-
-        req.user = decoded;
-        
-        next();
-
-    }catch (err){
-        console.log(err);
-        return res.status(401).json({message : " Unauthorized"})
-        
-    }
-
+function authArtist(req, res, next) {
+    return authenticate(req, res, next, ["artist"]);
 }
 
+function authUser(req, res, next) {
+    return authenticate(req, res, next, ["user"]);
+}
 
+function authAny(req, res, next) {
+    return authenticate(req, res, next, ["user", "artist"]);
+}
 
-module.exports = { authArtist, authUser }
+module.exports = { authArtist, authUser, authAny };

@@ -17,4 +17,8 @@ async function uploadFile(file){
 
 }
 
-module.exports = {uploadFile}
+async function deleteFile(fileId) {
+    return ImageKitClient.files.delete(fileId);
+}
+
+module.exports = { uploadFile, deleteFile }
