@@ -2,6 +2,13 @@ const userModel = require("../models/user.model");
 const jwt = require ("jsonwebtoken");
 const bcrypt = require("bcryptjs")
 
+const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+    maxAge: 7 * 24 * 60 * 60 * 1000
+}
+
 
 async function registerUser(req,res) {
 
@@ -37,7 +44,7 @@ async function registerUser(req,res) {
 
     },process.env.JWT_SECRET)
 
-    res.cookie("token", token)
+    res.cookie("token", token, cookieOptions)
 
     res.status(200).json({
         message : "User resgistered successfully",
@@ -85,7 +92,7 @@ async function loginUser(req, res){
 
     },process.env.JWT_SECRET)
 
-    res.cookie("token" , token)
+    res.cookie("token", token, cookieOptions)
 
     res.status(200).json({
         message : "User logged in successfully",
